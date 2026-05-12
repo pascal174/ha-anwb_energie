@@ -1,16 +1,17 @@
 """ANWB Energie Tarieven integratie."""
 from __future__ import annotations
 
-from datetime import timedelta
 import logging
+from datetime import timedelta
 
 import aiohttp
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.event import async_track_time_change
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .const import DOMAIN, API_URL, SCAN_INTERVAL_MINUTES
+from .const import DOMAIN, API_URL
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -23,6 +24,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = coordinator
+
+    # Trigger elke keer 1 seconde na een heel uur
+    @callback
+    def handle_hour_change(now):
+        hass.async_create_task(coordinator.async_refresh())
+
+    entry.async_on_unload(
+        async_track_time_change(hass, handle_hour_change, minute=0, second=1)
+    )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
@@ -43,16 +53,17 @@ class ANWBEnergieCoordinator(DataUpdateCoordinator):
             hass,
             _LOGGER,
             name=DOMAIN,
-            update_interval=timedelta(minutes=SCAN_INTERVAL_MINUTES),
+            # Geen automatisch interval, wordt aangestuurd door async_track_time_change
+            update_interval=None,
         )
 
     async def _async_update_data(self) -> dict:
-        from datetime import datetime, timezone, timedelta as td
+        from datetime import datetime, timezone
 
-        nl_tz = timezone(td(hours=2))
+        nl_tz = timezone(timedelta(hours=2))
         now_utc = datetime.now(timezone.utc)
         start = now_utc
-        end = now_utc + td(days=1)
+        end = now_utc + timedelta(days=1)
 
         params = {
             "startDate": start.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
@@ -78,7 +89,7 @@ class ANWBEnergieCoordinator(DataUpdateCoordinator):
             raise UpdateFailed("Geen data ontvangen van ANWB API")
 
         nu_uur = now_utc.strftime("%Y-%m-%dT%H")
-        volgend_uur = (now_utc + td(hours=1)).strftime("%Y-%m-%dT%H")
+        volgend_uur = (now_utc + timedelta(hours=1)).strftime("%Y-%m-%dT%H")
 
         huidig  = next((d for d in data if d["date"][:13] == nu_uur), data[0])
         volgend = next((d for d in data if d["date"][:13] == volgend_uur), None)
