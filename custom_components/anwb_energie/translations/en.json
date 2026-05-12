@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "ANWB Energie Tarieven",
+        "description": "Add the ANWB Energy Prices integration. No extra settings needed."
+      }
+    },
+    "abort": {
+      "already_configured": "ANWB Energie is already configured."
+    }
+  }
+}

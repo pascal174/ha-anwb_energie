@@ -1,0 +1,11 @@
+{
+  "domain": "anwb_energie",
+  "name": "ANWB Energie Tarieven",
+  "version": "1.0.0",
+  "documentation": "https://github.com/jouw-gebruikersnaam/anwb_energie",
+  "issue_tracker": "https://github.com/jouw-gebruikersnaam/anwb_energie/issues",
+  "requirements": ["aiohttp>=3.8.0"],
+  "codeowners": [],
+  "iot_class": "cloud_polling",
+  "config_flow": true
+}
