@@ -2,14 +2,16 @@
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import aiohttp
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_time_change
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, API_URL
 
@@ -58,43 +60,61 @@ class ANWBEnergieCoordinator(DataUpdateCoordinator):
         )
 
     async def _async_update_data(self) -> dict:
-        from datetime import datetime, timezone
-
-        nl_tz = timezone(timedelta(hours=2))
         now_utc = datetime.now(timezone.utc)
-        start = now_utc
-        end = now_utc + timedelta(days=1)
+        # Hele lokale dag van vandaag tot en met morgen, zodat een dagprijslijst
+        # (goedkoopste/duurste uur) mogelijk is.
+        start = dt_util.start_of_local_day()
+        end = dt_util.start_of_local_day(dt_util.now().date() + timedelta(days=2))
 
         params = {
-            "startDate": start.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
-            "endDate":   end.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+            "startDate": dt_util.as_utc(start).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+            "endDate":   dt_util.as_utc(end).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
             "interval":  "HOUR",
         }
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    API_URL,
-                    params=params,
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    timeout=aiohttp.ClientTimeout(total=10),
-                ) as resp:
-                    resp.raise_for_status()
-                    json_data = await resp.json()
+            session = async_get_clientsession(self.hass)
+            async with session.get(
+                API_URL,
+                params=params,
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                resp.raise_for_status()
+                json_data = await resp.json()
         except Exception as err:
             raise UpdateFailed(f"Fout bij ophalen ANWB data: {err}") from err
 
-        data = json_data.get("data", [])
+        # Uren waarvoor ANWB (nog) geen prijs heeft, komen terug met lege waarden.
+        data = [
+            d for d in json_data.get("data", [])
+            if any(v is not None for v in d.get("values", {}).values())
+        ]
         if not data:
             raise UpdateFailed("Geen data ontvangen van ANWB API")
 
-        nu_uur = now_utc.strftime("%Y-%m-%dT%H")
-        volgend_uur = (now_utc + timedelta(hours=1)).strftime("%Y-%m-%dT%H")
+        # De API levert lokale tijd met offset (bijv. +02:00); vergelijk op
+        # echte tijdstippen zodat zomer/wintertijd correct verloopt.
+        uur = timedelta(hours=1)
+        huidig = next(
+            (
+                d for d in data
+                if (start_uur := dt_util.parse_datetime(d["date"])) is not None
+                and start_uur <= now_utc < start_uur + uur
+            ),
+            None,
+        )
+        if huidig is None:
+            raise UpdateFailed("Geen prijs gevonden voor het huidige uur")
 
-        huidig  = next((d for d in data if d["date"][:13] == nu_uur), data[0])
-        volgend = next((d for d in data if d["date"][:13] == volgend_uur), None)
+        volgend_start = dt_util.parse_datetime(huidig["date"]) + uur
+        volgend = next(
+            (d for d in data if dt_util.parse_datetime(d["date"]) == volgend_start),
+            None,
+        )
 
         return {
             "huidig":  huidig,
             "volgend": volgend,
+            "alle":    data,
         }
